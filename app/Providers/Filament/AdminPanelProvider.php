@@ -39,6 +39,10 @@ class AdminPanelProvider extends PanelProvider
             ->widgets([
                 Widgets\AccountWidget::class,
                 Widgets\FilamentInfoWidget::class,
+                // Custom dashboard widgets dalam urutan yang benar
+                \App\Filament\Widgets\FuelStorageOverview::class,
+                \App\Filament\Widgets\RecentTransactions::class,
+                \App\Filament\Widgets\PendingApprovals::class,
             ])
             ->middleware([
                 EncryptCookies::class,

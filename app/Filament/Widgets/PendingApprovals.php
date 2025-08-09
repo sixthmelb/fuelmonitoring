@@ -109,13 +109,13 @@ class PendingApprovals extends BaseWidget
                         ->label('Reject')
                         ->icon('heroicon-o-x-circle')
                         ->color('danger')
-                        //->form([
-                        //    Tables\Components\Textarea::make('rejection_reason')
-                        //        ->label('Rejection Reason')
-                        //        ->required()
-                        //        ->placeholder('Please provide a reason for rejecting this request')
-                        //        ->rows(3),
-                        //])
+                        ->form([
+                            Textarea::make('rejection_reason')
+                                ->label('Rejection Reason')
+                                ->required()
+                                ->placeholder('Please provide a reason for rejecting this request')
+                                ->rows(3),
+                        ])
                         ->action(function (ApprovalRequest $record, array $data): void {
                             $record->reject(auth()->user(), $data['rejection_reason']);
                         })

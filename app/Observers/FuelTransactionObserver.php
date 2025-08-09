@@ -4,6 +4,7 @@ namespace App\Observers;
 
 use App\Models\FuelTransaction;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Command untuk membuat observer ini:
@@ -13,8 +14,7 @@ use Illuminate\Support\Facades\Log;
  * FuelTransaction::observe(FuelTransactionObserver::class);
  * 
  * Observer ini menangani:
- * - Auto update capacity storage/truck
- * - Update unit mileage
+ * - Auto update capacity storage/truck dan unit mileage
  * - Generate transaction code
  * - Validation business rules
  */
@@ -176,6 +176,18 @@ class FuelTransactionObserver
                 }
                 break;
 
+            case FuelTransaction::TYPE_STORAGE_TO_TRUCK:
+                // Storage ke Truck: kurangi storage, tambah truck
+                if ($transaction->sourceStorage) {
+                    $type = $isReverting ? 'add' : 'subtract';
+                    $transaction->sourceStorage->updateCapacity($amount, $type);
+                }
+                if ($transaction->destinationTruck) {
+                    $type = $isReverting ? 'subtract' : 'add';
+                    $transaction->destinationTruck->updateCapacity($amount, $type);
+                }
+                break;
+
             case FuelTransaction::TYPE_STORAGE_TO_UNIT:
                 // Storage ke Unit: kurangi storage saja (unit tidak punya capacity tracking)
                 if ($transaction->sourceStorage) {
@@ -301,180 +313,5 @@ class FuelTransactionObserver
             'transaction_id' => $fuelTransaction->id,
             'transaction_code' => $fuelTransaction->transaction_code
         ]);
-    }
-
-    /**
-     * Validate capacity availability before transaction
-     */
-    private function validateCapacityAvailability(FuelTransaction $transaction): bool
-    {
-        $amount = $transaction->fuel_amount;
-
-        switch ($transaction->transaction_type) {
-            case FuelTransaction::TYPE_STORAGE_TO_UNIT:
-            case FuelTransaction::TYPE_STORAGE_TO_TRUCK:
-                if ($transaction->sourceStorage) {
-                    if ($transaction->sourceStorage->current_capacity < $amount) {
-                        Log::warning('Insufficient fuel in source storage', [
-                            'storage_id' => $transaction->sourceStorage->id,
-                            'storage_code' => $transaction->sourceStorage->code,
-                            'current_capacity' => $transaction->sourceStorage->current_capacity,
-                            'requested_amount' => $amount
-                        ]);
-                        return false;
-                    }
-                }
-                break;
-
-            case FuelTransaction::TYPE_TRUCK_TO_UNIT:
-                if ($transaction->sourceTruck) {
-                    if ($transaction->sourceTruck->current_capacity < $amount) {
-                        Log::warning('Insufficient fuel in source truck', [
-                            'truck_id' => $transaction->sourceTruck->id,
-                            'truck_code' => $transaction->sourceTruck->code,
-                            'current_capacity' => $transaction->sourceTruck->current_capacity,
-                            'requested_amount' => $amount
-                        ]);
-                        return false;
-                    }
-                }
-                break;
-
-            case FuelTransaction::TYPE_VENDOR_TO_STORAGE:
-                if ($transaction->destinationStorage) {
-                    $availableCapacity = $transaction->destinationStorage->max_capacity - $transaction->destinationStorage->current_capacity;
-                    if ($availableCapacity < $amount) {
-                        Log::warning('Insufficient space in destination storage', [
-                            'storage_id' => $transaction->destinationStorage->id,
-                            'storage_code' => $transaction->destinationStorage->code,
-                            'available_capacity' => $availableCapacity,
-                            'requested_amount' => $amount
-                        ]);
-                        return false;
-                    }
-                }
-                break;
-        }
-
-        return true;
-    }
-
-    /**
-     * Validate unit mileage progression
-     */
-    private function validateUnitMileage(FuelTransaction $transaction): bool
-    {
-        if (!$transaction->unit) return true;
-
-        $unit = $transaction->unit;
-
-        // Validate KM tidak mundur
-        if ($transaction->unit_km && $transaction->unit_km < $unit->current_km) {
-            Log::warning('Unit KM cannot be less than current KM', [
-                'unit_id' => $unit->id,
-                'unit_code' => $unit->code,
-                'current_km' => $unit->current_km,
-                'transaction_km' => $transaction->unit_km
-            ]);
-            return false;
-        }
-
-        // Validate HM tidak mundur
-        if ($transaction->unit_hm && $transaction->unit_hm < $unit->current_hm) {
-            Log::warning('Unit HM cannot be less than current HM', [
-                'unit_id' => $unit->id,
-                'unit_code' => $unit->code,
-                'current_hm' => $unit->current_hm,
-                'transaction_hm' => $transaction->unit_hm
-            ]);
-            return false;
-        }
-
-        // Warning jika KM/HM jump terlalu besar (kemungkinan typo)
-        if ($transaction->unit_km && ($transaction->unit_km - $unit->current_km) > 1000) {
-            Log::warning('Large KM increase detected, please verify', [
-                'unit_code' => $unit->code,
-                'km_increase' => $transaction->unit_km - $unit->current_km,
-                'current_km' => $unit->current_km,
-                'new_km' => $transaction->unit_km
-            ]);
-        }
-
-        if ($transaction->unit_hm && ($transaction->unit_hm - $unit->current_hm) > 100) {
-            Log::warning('Large HM increase detected, please verify', [
-                'unit_code' => $unit->code,
-                'hm_increase' => $transaction->unit_hm - $unit->current_hm,
-                'current_hm' => $unit->current_hm,
-                'new_hm' => $transaction->unit_hm
-            ]);
-        }
-
-        return true;
-    }
-
-    /**
-     * Update truck status berdasarkan activity
-     */
-    private function updateTruckStatus(FuelTransaction $transaction): void
-    {
-        // Update source truck status ke in_use jika sedang distribute
-        if ($transaction->sourceTruck && $transaction->transaction_type === FuelTransaction::TYPE_TRUCK_TO_UNIT) {
-            if ($transaction->sourceTruck->status === \App\Models\FuelTruck::STATUS_AVAILABLE) {
-                $transaction->sourceTruck->updateQuietly(['status' => \App\Models\FuelTruck::STATUS_IN_USE]);
-            }
-        }
-
-        // Update destination truck status ke available jika sudah terisi
-        if ($transaction->destinationTruck && $transaction->transaction_type === FuelTransaction::TYPE_STORAGE_TO_TRUCK) {
-            if ($transaction->destinationTruck->current_capacity > 0) {
-                $transaction->destinationTruck->updateQuietly(['status' => \App\Models\FuelTruck::STATUS_AVAILABLE]);
-            }
-        }
-    }
-
-    /**
-     * Create alert jika ada kondisi yang perlu perhatian
-     */
-    private function createAlerts(FuelTransaction $transaction): void
-    {
-        // Alert jika storage hampir kosong setelah transaksi
-        if ($transaction->sourceStorage && $transaction->sourceStorage->capacity_percentage <= 10) {
-            Log::warning('Storage level low after transaction', [
-                'storage_code' => $transaction->sourceStorage->code,
-                'percentage' => $transaction->sourceStorage->capacity_percentage,
-                'transaction_code' => $transaction->transaction_code
-            ]);
-        }
-
-        // Alert jika truck hampir kosong
-        if ($transaction->sourceTruck && $transaction->sourceTruck->capacity_percentage <= 5) {
-            Log::warning('Truck level very low after transaction', [
-                'truck_code' => $transaction->sourceTruck->code,
-                'percentage' => $transaction->sourceTruck->capacity_percentage,
-                'transaction_code' => $transaction->transaction_code
-            ]);
-        }
-
-        // Alert jika consumption rate tidak normal
-        $consumption = $transaction->fuel_consumption;
-        if ($consumption) {
-            // Check consumption per KM (normal range 3-8 L/KM untuk dump truck)
-            if (isset($consumption['per_km']) && ($consumption['per_km'] > 10 || $consumption['per_km'] < 1)) {
-                Log::warning('Abnormal fuel consumption per KM detected', [
-                    'unit_code' => $transaction->unit->code,
-                    'consumption_per_km' => $consumption['per_km'],
-                    'transaction_code' => $transaction->transaction_code
-                ]);
-            }
-
-            // Check consumption per HM (normal range 15-45 L/HM untuk excavator)
-            if (isset($consumption['per_hm']) && ($consumption['per_hm'] > 60 || $consumption['per_hm'] < 5)) {
-                Log::warning('Abnormal fuel consumption per HM detected', [
-                    'unit_code' => $transaction->unit->code,
-                    'consumption_per_hm' => $consumption['per_hm'],
-                    'transaction_code' => $transaction->transaction_code
-                ]);
-            }
-        }
     }
 }

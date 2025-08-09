@@ -94,9 +94,9 @@ class ViewApprovalRequest extends ViewRecord
                 ->label('View Original Transaction')
                 ->icon('heroicon-o-arrow-right-circle')
                 ->color('info')
-                //->url(fn (): string => 
-                //    \App\Filament\Resources\FuelTransactionResource::getUrl('edit', $this->record->fuelTransaction)
-                //)
+                ->url(fn (): string => 
+                    route('filament.admin.resources.fuel-transactions.edit', ['record' => $this->record->fuelTransaction])
+                )
                 ->openUrlInNewTab(),
         ];
     }
