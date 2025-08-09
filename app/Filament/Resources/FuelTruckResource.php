@@ -428,7 +428,7 @@ class FuelTruckResource extends Resource
         return [
             'index' => Pages\ListFuelTrucks::route('/'),
             'create' => Pages\CreateFuelTruck::route('/create'),
-            'view' => Pages\ViewFuelTruck::route('/{record}'),
+            //'view' => Pages\ViewFuelTruck::route('/{record}'),
             'edit' => Pages\EditFuelTruck::route('/{record}/edit'),
         ];
     }

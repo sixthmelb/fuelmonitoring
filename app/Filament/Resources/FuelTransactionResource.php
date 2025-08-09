@@ -44,7 +44,7 @@ class FuelTransactionResource extends Resource
     
     protected static ?int $navigationSort = 4;
 
-    public static function form(Form $form): Form
+public static function form(Form $form): Form
     {
         return $form
             ->schema([
@@ -200,16 +200,16 @@ class FuelTransactionResource extends Resource
                                     ->maxValue(fn (Get $get): float => (float) $get('max_available_fuel') ?: 999999)
                                     ->live(onBlur: true)
                                     ->suffix('L')
-                                    ->afterStateUpdated(function (Get $get, $state) {
-                                        $maxAvailable = (float) $get('max_available_fuel');
-                                        if ($maxAvailable > 0 && $state > $maxAvailable) {
-                                            \Filament\Notifications\Notification::make()
-                                                ->title('Insufficient Fuel')
-                                                ->body("Only {$maxAvailable}L available in selected source")
-                                                ->danger()
-                                                ->send();
-                                        }
-                                    }),
+                                    ->rules([
+                                        function (Get $get) {
+                                            return function (string $attribute, $value, \Closure $fail) use ($get) {
+                                                $maxAvailable = (float) $get('max_available_fuel');
+                                                if ($maxAvailable > 0 && $value > $maxAvailable) {
+                                                    $fail("Only {$maxAvailable}L available in selected source");
+                                                }
+                                            };
+                                        },
+                                    ]),
                                     
                                 Forms\Components\TextInput::make('unit_km')
                                     ->label('Unit KM')
@@ -254,6 +254,10 @@ class FuelTransactionResource extends Resource
                         Forms\Components\Hidden::make('max_available_fuel'),
                         Forms\Components\Hidden::make('current_unit_km'),
                         Forms\Components\Hidden::make('current_unit_hm'),
+                        
+                        // Hidden field untuk created_by (akan diisi otomatis)
+                        Forms\Components\Hidden::make('created_by')
+                            ->default(fn () => auth()->id()),
                     ]),
                     
                 Forms\Components\Section::make('Estimated Consumption')
@@ -589,4 +593,5 @@ class FuelTransactionResource extends Resource
         $pending = static::getModel()::pendingApproval()->count();
         return $pending > 0 ? 'warning' : null;
     }
+    
 }

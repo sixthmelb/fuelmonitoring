@@ -40,7 +40,7 @@ class RecentTransactions extends BaseWidget
                     ->weight('bold')
                     ->copyable(),
                     
-                Tables\Columns\BadgeColumn::make('transaction_type')
+                Tables\Columns\TextColumn::make('transaction_type')
                     ->label('Type')
                     ->formatStateUsing(fn (string $state): string => 
                         match($state) {
@@ -51,6 +51,7 @@ class RecentTransactions extends BaseWidget
                             default => ucfirst(str_replace('_', ' ', $state))
                         }
                     )
+                    ->badge()
                     ->color(fn (string $state): string => match($state) {
                         FuelTransaction::TYPE_VENDOR_TO_STORAGE => 'success',
                         FuelTransaction::TYPE_STORAGE_TO_TRUCK => 'info',
@@ -76,7 +77,7 @@ class RecentTransactions extends BaseWidget
                 Tables\Columns\TextColumn::make('fuel_amount')
                     ->label('Amount')
                     ->formatStateUsing(fn ($state) => number_format($state, 0) . ' L')
-                    ->alignment('right')
+                    ->alignEnd()
                     ->weight('bold')
                     ->color(fn ($state) => match(true) {
                         $state >= 1000 => 'success',
@@ -107,7 +108,7 @@ class RecentTransactions extends BaseWidget
                     ->color('info')
                     ->size('sm')
                     ->url(fn (FuelTransaction $record): string => 
-                        route('filament.admin.resources.fuel-transactions.view', $record)
+                        route('filament.admin.resources.fuel-transactions.edit', $record)
                     ),
                     
                 Tables\Actions\Action::make('approve')
@@ -116,7 +117,7 @@ class RecentTransactions extends BaseWidget
                     ->size('sm')
                     ->visible(fn (FuelTransaction $record): bool => 
                         !$record->is_approved && 
-                        auth()->user()->hasRole(['manager', 'superadmin'])
+                        auth()->user()->hasAnyRole(['manager', 'superadmin'])
                     )
                     ->requiresConfirmation()
                     ->action(function (FuelTransaction $record): void {
@@ -130,26 +131,9 @@ class RecentTransactions extends BaseWidget
             ])
             ->striped()
             ->paginated(false)
-            ->defaultSort('created_at', 'desc');
-    }
-    
-    protected function getTableHeader(): ?string
-    {
-        return 'Latest fuel transactions across all operations';
-    }
-    
-    protected function getTableEmptyStateIcon(): ?string
-    {
-        return 'heroicon-o-arrow-right-circle';
-    }
-    
-    protected function getTableEmptyStateHeading(): ?string
-    {
-        return 'No transactions yet';
-    }
-    
-    protected function getTableEmptyStateDescription(): ?string
-    {
-        return 'Fuel transactions will appear here once they are recorded.';
+            ->defaultSort('created_at', 'desc')
+            ->emptyStateIcon('heroicon-o-arrow-right-circle')
+            ->emptyStateHeading('No transactions yet')
+            ->emptyStateDescription('Fuel transactions will appear here once they are recorded.');
     }
 }
