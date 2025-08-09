@@ -213,4 +213,11 @@ class Unit extends Model
     {
         return $query->where('type', $type);
     }
+    /**
+     * Get unit name with code for display
+     */
+    public function getNameWithCodeAttribute(): string
+    {
+        return "{$this->name} ({$this->code})";
+    }
 }
