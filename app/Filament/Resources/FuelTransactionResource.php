@@ -12,6 +12,7 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Filament\Tables\Filters\TrashedFilter;
@@ -499,17 +500,18 @@ public static function form(Form $form): Form
                             );
                     }),
             ])
-->actions([
+            ->actions([
                 Tables\Actions\ViewAction::make(),
                 
-                // Edit langsung - hanya untuk manager/superadmin
+                // EDIT LANGSUNG - HANYA untuk Manager/Superadmin untuk transaksi yang bisa diedit
                 Tables\Actions\EditAction::make()
                     ->visible(fn (FuelTransaction $record): bool => 
                         auth()->user()->hasAnyRole(['superadmin', 'manager']) && 
-                        $record->canBeEdited()
+                        $record->canBeEdited() &&
+                        !$record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
                     ),
                     
-                // Request Edit - untuk staff
+                // REQUEST EDIT - HANYA untuk Staff untuk transaksi yang sudah approved
                 Tables\Actions\Action::make('request_edit')
                     ->label('Request Edit')
                     ->icon('heroicon-o-pencil-square')
@@ -539,7 +541,7 @@ public static function form(Form $form): Form
                     })
                     ->successNotificationTitle('Edit request submitted for approval'),
                     
-                // Request Delete - untuk staff
+                // REQUEST DELETE - HANYA untuk Staff untuk transaksi yang sudah approved
                 Tables\Actions\Action::make('request_delete')
                     ->label('Request Delete')
                     ->icon('heroicon-o-trash')
@@ -572,7 +574,7 @@ public static function form(Form $form): Form
                     })
                     ->successNotificationTitle('Delete request submitted for approval'),
                 
-                // Approve - hanya untuk manager/superadmin
+                // APPROVE - HANYA untuk Manager/Superadmin untuk transaksi pending
                 Tables\Actions\Action::make('approve')
                     ->label('Approve')
                     ->icon('heroicon-o-check-circle')
@@ -591,7 +593,7 @@ public static function form(Form $form): Form
                     })
                     ->successNotificationTitle('Transaction approved successfully'),
                     
-                // Status indicator untuk pending requests (read-only)
+                // STATUS INDICATOR - untuk staff yang punya pending requests (read-only)
                 Tables\Actions\Action::make('pending_request_status')
                     ->label('Request Pending')
                     ->icon('heroicon-o-clock')
@@ -673,6 +675,43 @@ public static function form(Form $form): Form
     {
         $pending = static::getModel()::pendingApproval()->count();
         return $pending > 0 ? 'warning' : null;
+    }
+    public static function canEdit(Model $record): bool
+    {
+    // Hanya manager/superadmin yang bisa edit
+    if (!auth()->user()->hasAnyRole(['manager', 'superadmin'])) {
+        return false;
+    }
+    
+    // Transaksi harus bisa diedit
+    if (!$record->canBeEdited()) {
+        return false;
+    }
+    
+    // Tidak boleh ada pending approval request
+    if ($record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()) {
+        return false;
+    }
+    
+    return true;
+    }
+
+    /**
+     * Kontrol akses ke create page
+     */
+    public static function canCreate(): bool
+    {
+        // Semua authenticated user bisa create
+        return auth()->check();
+    }
+
+    /**
+     * Kontrol akses ke view page/action
+     */
+    public static function canView(Model $record): bool
+    {
+        // Semua authenticated user bisa view
+        return auth()->check();
     }
     
 }
