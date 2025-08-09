@@ -33,7 +33,7 @@ class RolesPermissionsSeeder extends Seeder
         // Reset cached roles and permissions
         app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
 
-        // Create permissions
+// Tambahkan permissions ini di array $permissions:
         $permissions = [
             // Fuel Storage Permissions
             'view_fuel_storage',
@@ -59,6 +59,10 @@ class RolesPermissionsSeeder extends Seeder
             'edit_fuel_transaction',
             'delete_fuel_transaction',
             'approve_fuel_transaction',
+            
+            // BARU: Request Permissions untuk Staff
+            'request_edit_fuel_transaction',
+            'request_delete_fuel_transaction',
 
             // Approval Request Permissions
             'view_approval_request',
@@ -80,7 +84,6 @@ class RolesPermissionsSeeder extends Seeder
             'view_settings',
             'edit_settings',
         ];
-
         foreach ($permissions as $permission) {
             Permission::create(['name' => $permission]);
         }
@@ -124,7 +127,7 @@ class RolesPermissionsSeeder extends Seeder
             'view_dashboard',
         ]);
 
-        // 3. Staff Role - Can only input transactions and view basic data
+        // 3. Staff Role - Updated dengan request permissions
         $staffRole = Role::create(['name' => 'staff']);
         $staffRole->givePermissionTo([
             // View basic data (read-only)
@@ -136,8 +139,15 @@ class RolesPermissionsSeeder extends Seeder
             // Create transactions only
             'create_fuel_transaction',
             
+            // BARU: Request permissions untuk approval workflow
+            'request_edit_fuel_transaction', // Request edit approval
+            'request_delete_fuel_transaction', // Request delete approval
+            
             // View dashboard
             'view_dashboard',
+            
+            // BARU: View approval requests (untuk melihat status request mereka)
+            'view_approval_request',
         ]);
 
         // Create default users for each role

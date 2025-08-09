@@ -61,10 +61,11 @@ class FuelTruckResource extends Resource
                                     ->unique(ignoreRecord: true)
                                     ->maxLength(20)
                                     ->placeholder('e.g., FT-001')
-                                    ->rules(['regex:/^[A-Z]{2}-\d{3}$/'])
+                                    ->regex('/^[A-Z]{2}-\d{3,4}$/')
                                     ->validationMessages([
                                         'regex' => 'Code must follow format: FT-001',
-                                    ]),
+                                    ])
+                                    ->helperText('Format: FT-001 (Letters-Numbers)'),
                             ]),
                             
                         Forms\Components\TextInput::make('license_plate')
@@ -107,7 +108,7 @@ class FuelTruckResource extends Resource
                                     ->numeric()
                                     ->minValue(1)
                                     ->maxValue(50000)
-                                    ->step(100)
+                                    ->step(1)
                                     ->live(onBlur: true)
                                     ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
                                         // Ensure current_capacity doesn't exceed max
@@ -146,33 +147,123 @@ class FuelTruckResource extends Resource
                                     }),
                             ]),
                             
-                        // Capacity Preview
-                        Forms\Components\Placeholder::make('capacity_preview')
+                        // Fixed Truck Capacity Preview using Placeholder
+                        Forms\Components\Placeholder::make('truck_capacity_preview')
                             ->label('Capacity Preview')
-                            ->content(function (Forms\Get $get): string {
+                            ->content(function (Forms\Get $get): \Illuminate\Support\HtmlString {
                                 $max = (float) $get('max_capacity');
                                 $current = (float) $get('current_capacity');
+                                $status = $get('status') ?? 'available';
                                 
-                                if (!$max) return 'Enter maximum capacity to see preview';
+                                if (!$max) {
+                                    return new \Illuminate\Support\HtmlString('
+                                        <div class="text-center text-gray-500 dark:text-gray-400 py-4">
+                                            <div class="text-sm">Enter maximum capacity to see preview</div>
+                                        </div>
+                                    ');
+                                }
                                 
                                 $percentage = $max > 0 ? ($current / $max) * 100 : 0;
                                 $available = $max - $current;
                                 
-                                $status = match(true) {
-                                    $percentage >= 80 => '🟢 Full',
-                                    $percentage >= 50 => '🟡 Half Full',
-                                    $percentage >= 20 => '🟠 Low',
-                                    $percentage > 0 => '🔴 Very Low',
-                                    default => '⚫ Empty'
+                                $fuelStatus = match(true) {
+                                    $percentage >= 80 => ['text' => 'Full', 'icon' => '🚛', 'color' => 'text-blue-600'],
+                                    $percentage >= 50 => ['text' => 'Half Full', 'icon' => '🚚', 'color' => 'text-green-600'],
+                                    $percentage >= 20 => ['text' => 'Low', 'icon' => '🚐', 'color' => 'text-yellow-600'],
+                                    $percentage > 0 => ['text' => 'Very Low', 'icon' => '🚌', 'color' => 'text-orange-600'],
+                                    default => ['text' => 'Empty', 'icon' => '🚐', 'color' => 'text-gray-600']
                                 };
                                 
-                                return "
-                                    <div class='space-y-2'>
-                                        <div><strong>Status:</strong> {$status}</div>
-                                        <div><strong>Usage:</strong> " . number_format($percentage, 1) . "%</div>
-                                        <div><strong>Available Space:</strong> " . number_format($available, 0) . " L</div>
+                                $operationalStatus = match($status) {
+                                    'available' => ['text' => 'Available', 'color' => 'text-green-600'],
+                                    'in_use' => ['text' => 'In Use', 'color' => 'text-blue-600'],
+                                    'maintenance' => ['text' => 'Maintenance', 'color' => 'text-yellow-600'],
+                                    'out_of_service' => ['text' => 'Out of Service', 'color' => 'text-red-600'],
+                                    default => ['text' => 'Unknown', 'color' => 'text-gray-600']
+                                };
+                                
+                                $barColor = match(true) {
+                                    $percentage >= 80 => 'bg-blue-500',
+                                    $percentage >= 50 => 'bg-green-500',
+                                    $percentage >= 20 => 'bg-yellow-500',
+                                    $percentage > 0 => 'bg-orange-500',
+                                    default => 'bg-gray-300'
+                                };
+                                
+                                $alertHtml = '';
+                                if ($status === 'maintenance') {
+                                    $alertHtml = '
+                                        <div class="flex items-center justify-center space-x-2 text-yellow-600 dark:text-yellow-400 mt-3">
+                                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4"/>
+                                            </svg>
+                                            <span class="text-sm font-medium">Under Maintenance</span>
+                                        </div>
+                                    ';
+                                } elseif ($percentage <= 10 && $status === 'available') {
+                                    $alertHtml = '
+                                        <div class="flex items-center justify-center space-x-2 text-orange-600 dark:text-orange-400 mt-3">
+                                            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 19.5c-.77.833.192 2.5 1.732 2.5z" />
+                                            </svg>
+                                            <span class="text-sm font-medium">Low Fuel - Needs Refill</span>
+                                        </div>
+                                    ';
+                                }
+                                
+                                return new \Illuminate\Support\HtmlString('
+                                    <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                                        <div class="space-y-3">
+                                            <div class="flex items-center justify-between">
+                                                <div class="flex items-center space-x-3">
+                                                    <span class="text-lg">' . $fuelStatus['icon'] . '</span>
+                                                    <div>
+                                                        <div class="font-medium ' . $fuelStatus['color'] . ' dark:text-white">
+                                                            ' . $fuelStatus['text'] . '
+                                                        </div>
+                                                        <div class="text-sm ' . $operationalStatus['color'] . '">
+                                                            ' . $operationalStatus['text'] . '
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="text-right">
+                                                    <div class="text-lg font-bold text-gray-900 dark:text-white">
+                                                        ' . number_format($percentage, 1) . '%
+                                                    </div>
+                                                    <div class="text-sm text-gray-500 dark:text-gray-400">
+                                                        Fuel Level
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+                                                <div class="' . $barColor . ' h-3 rounded-full transition-all duration-300" style="width: ' . min($percentage, 100) . '%"></div>
+                                            </div>
+                                            
+                                            <div class="grid grid-cols-3 gap-4 text-sm">
+                                                <div class="text-center">
+                                                    <div class="font-medium text-gray-900 dark:text-white">
+                                                        ' . number_format($current, 0) . 'L
+                                                    </div>
+                                                    <div class="text-gray-500 dark:text-gray-400">Current</div>
+                                                </div>
+                                                <div class="text-center">
+                                                    <div class="font-medium text-gray-900 dark:text-white">
+                                                        ' . number_format($available, 0) . 'L
+                                                    </div>
+                                                    <div class="text-gray-500 dark:text-gray-400">Available</div>
+                                                </div>
+                                                <div class="text-center">
+                                                    <div class="font-medium text-gray-900 dark:text-white">
+                                                        ' . number_format($max, 0) . 'L
+                                                    </div>
+                                                    <div class="text-gray-500 dark:text-gray-400">Maximum</div>
+                                                </div>
+                                            </div>
+                                            ' . $alertHtml . '
+                                        </div>
                                     </div>
-                                ";
+                                ');
                             })
                             ->columnSpanFull(),
                     ]),
@@ -193,7 +284,6 @@ class FuelTruckResource extends Resource
                     ]),
             ]);
     }
-
     public static function table(Table $table): Table
     {
         return $table

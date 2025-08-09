@@ -373,13 +373,41 @@ public static function form(Form $form): Form
                     ->view('filament.columns.consumption-info')
                     ->toggleable(),
                     
-                Tables\Columns\IconColumn::make('is_approved')
+                Tables\Columns\BadgeColumn::make('approval_status')
                     ->label('Status')
-                    ->boolean()
-                    ->trueIcon('heroicon-o-check-circle')
-                    ->falseIcon('heroicon-o-clock')
-                    ->trueColor('success')
-                    ->falseColor('warning'),
+                    ->getStateUsing(function (FuelTransaction $record): string {
+                        // Check if there's pending approval request
+                        $pendingRequest = $record->approvalRequests()
+                            ->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)
+                            ->first();
+                            
+                        if ($pendingRequest) {
+                            return $pendingRequest->request_type . '_pending';
+                        }
+                        
+                        return $record->is_approved ? 'approved' : 'pending_approval';
+                    })
+                    ->formatStateUsing(fn (string $state): string => match($state) {
+                        'approved' => 'Approved',
+                        'pending_approval' => 'Pending Approval',
+                        'edit_pending' => 'Edit Request Pending',
+                        'delete_pending' => 'Delete Request Pending',
+                        default => ucfirst(str_replace('_', ' ', $state))
+                    })
+                    ->color(fn (string $state): string => match($state) {
+                        'approved' => 'success',
+                        'pending_approval' => 'warning',
+                        'edit_pending' => 'info',
+                        'delete_pending' => 'danger',
+                        default => 'gray'
+                    })
+                    ->icon(fn (string $state): string => match($state) {
+                        'approved' => 'heroicon-o-check-circle',
+                        'pending_approval' => 'heroicon-o-clock',
+                        'edit_pending' => 'heroicon-o-pencil-square',
+                        'delete_pending' => 'heroicon-o-trash',
+                        default => 'heroicon-o-question-mark-circle'
+                    }),
                     
                 Tables\Columns\TextColumn::make('createdBy.name')
                     ->label('Created By')
@@ -471,21 +499,87 @@ public static function form(Form $form): Form
                             );
                     }),
             ])
-            ->actions([
+->actions([
                 Tables\Actions\ViewAction::make(),
+                
+                // Edit langsung - hanya untuk manager/superadmin
                 Tables\Actions\EditAction::make()
                     ->visible(fn (FuelTransaction $record): bool => 
-                        auth()->user()->hasRole(['superadmin', 'manager']) || 
+                        auth()->user()->hasAnyRole(['superadmin', 'manager']) && 
                         $record->canBeEdited()
                     ),
                     
+                // Request Edit - untuk staff
+                Tables\Actions\Action::make('request_edit')
+                    ->label('Request Edit')
+                    ->icon('heroicon-o-pencil-square')
+                    ->color('warning')
+                    ->visible(fn (FuelTransaction $record): bool => 
+                        auth()->user()->hasRole('staff') && 
+                        $record->is_approved &&
+                        !$record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
+                    )
+                    ->form([
+                        Forms\Components\Textarea::make('reason')
+                            ->label('Reason for Edit Request')
+                            ->required()
+                            ->placeholder('Please explain why this transaction needs to be edited')
+                            ->rows(4)
+                            ->helperText('Provide detailed reason for the edit request'),
+                    ])
+                    ->action(function (FuelTransaction $record, array $data): void {
+                        \App\Models\ApprovalRequest::create([
+                            'fuel_transaction_id' => $record->id,
+                            'request_type' => \App\Models\ApprovalRequest::TYPE_EDIT,
+                            'requested_by' => auth()->id(),
+                            'reason' => $data['reason'],
+                            'status' => \App\Models\ApprovalRequest::STATUS_PENDING,
+                            'original_data' => $record->toArray(),
+                        ]);
+                    })
+                    ->successNotificationTitle('Edit request submitted for approval'),
+                    
+                // Request Delete - untuk staff
+                Tables\Actions\Action::make('request_delete')
+                    ->label('Request Delete')
+                    ->icon('heroicon-o-trash')
+                    ->color('danger')
+                    ->visible(fn (FuelTransaction $record): bool => 
+                        auth()->user()->hasRole('staff') && 
+                        $record->is_approved &&
+                        !$record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
+                    )
+                    ->form([
+                        Forms\Components\Textarea::make('reason')
+                            ->label('Reason for Delete Request')
+                            ->required()
+                            ->placeholder('Please explain why this transaction needs to be deleted')
+                            ->rows(4)
+                            ->helperText('Provide detailed reason for the delete request'),
+                    ])
+                    ->requiresConfirmation()
+                    ->modalHeading('Request Transaction Deletion')
+                    ->modalDescription('This will send a delete request to managers. The transaction will not be deleted until approved.')
+                    ->action(function (FuelTransaction $record, array $data): void {
+                        \App\Models\ApprovalRequest::create([
+                            'fuel_transaction_id' => $record->id,
+                            'request_type' => \App\Models\ApprovalRequest::TYPE_DELETE,
+                            'requested_by' => auth()->id(),
+                            'reason' => $data['reason'],
+                            'status' => \App\Models\ApprovalRequest::STATUS_PENDING,
+                            'original_data' => $record->toArray(),
+                        ]);
+                    })
+                    ->successNotificationTitle('Delete request submitted for approval'),
+                
+                // Approve - hanya untuk manager/superadmin
                 Tables\Actions\Action::make('approve')
                     ->label('Approve')
                     ->icon('heroicon-o-check-circle')
                     ->color('success')
                     ->visible(fn (FuelTransaction $record): bool => 
                         !$record->is_approved && 
-                        auth()->user()->hasRole(['superadmin', 'manager'])
+                        auth()->user()->hasAnyRole(['superadmin', 'manager'])
                     )
                     ->requiresConfirmation()
                     ->action(function (FuelTransaction $record): void {
@@ -497,30 +591,17 @@ public static function form(Form $form): Form
                     })
                     ->successNotificationTitle('Transaction approved successfully'),
                     
-                Tables\Actions\Action::make('request_edit')
-                    ->label('Request Edit')
-                    ->icon('heroicon-o-pencil-square')
-                    ->color('warning')
+                // Status indicator untuk pending requests (read-only)
+                Tables\Actions\Action::make('pending_request_status')
+                    ->label('Request Pending')
+                    ->icon('heroicon-o-clock')
+                    ->color('gray')
+                    ->disabled()
                     ->visible(fn (FuelTransaction $record): bool => 
-                        $record->requiresApprovalForEdit() && 
-                        auth()->user()->hasRole('staff')
+                        auth()->user()->hasRole('staff') && 
+                        $record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
                     )
-                    ->form([
-                        Forms\Components\Textarea::make('reason')
-                            ->label('Reason for Edit Request')
-                            ->required()
-                            ->placeholder('Please explain why this transaction needs to be edited'),
-                    ])
-                    ->action(function (FuelTransaction $record, array $data): void {
-                        \App\Models\ApprovalRequest::create([
-                            'fuel_transaction_id' => $record->id,
-                            'request_type' => 'edit',
-                            'requested_by' => auth()->id(),
-                            'reason' => $data['reason'],
-                            'original_data' => $record->toArray(),
-                        ]);
-                    })
-                    ->successNotificationTitle('Edit request submitted for approval'),
+                    ->tooltip('You have a pending approval request for this transaction'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

@@ -41,141 +41,192 @@ class FuelStorageResource extends Resource
     protected static ?int $navigationSort = 1;
 
     public static function form(Form $form): Form
-    {
-        return $form
-            ->schema([
-                Forms\Components\Section::make('Storage Information')
-                    ->description('Basic information about the fuel storage')
-                    ->schema([
-                        Forms\Components\Grid::make(2)
-                            ->schema([
-                                Forms\Components\TextInput::make('name')
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->live(onBlur: true)
-                                    ->placeholder('e.g., Main Fuel Storage A'),
-                                    
-                                Forms\Components\TextInput::make('code')
-                                    ->required()
-                                    ->unique(ignoreRecord: true)
-                                    ->maxLength(20)
-                                    ->placeholder('e.g., ST-001')
-                                    ->rules(['regex:/^[A-Z]{2}-\d{3}$/'])
-                                    ->validationMessages([
-                                        'regex' => 'Code must follow format: ST-001',
-                                    ]),
-                            ]),
-                            
-                        Forms\Components\TextInput::make('location')
-                            ->required()
-                            ->maxLength(255)
-                            ->placeholder('e.g., Mining Site A - North Sector'),
-                            
-                        Forms\Components\Textarea::make('description')
-                            ->columnSpanFull()
-                            ->rows(3)
-                            ->placeholder('Optional description of the storage facility'),
-                    ]),
-                    
-                Forms\Components\Section::make('Capacity Configuration')
-                    ->description('Set storage capacity limits and thresholds')
-                    ->schema([
-                        Forms\Components\Grid::make(3)
-                            ->schema([
-                                Forms\Components\TextInput::make('max_capacity')
-                                    ->label('Maximum Capacity (Liters)')
-                                    ->required()
-                                    ->numeric()
-                                    ->minValue(1)
-                                    ->maxValue(1000000)
-                                    ->step(100)
-                                    ->live(onBlur: true)
-                                    ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
-                                        // Auto-calculate min_threshold if not set (10% of max)
-                                        if ($state && !$get('min_threshold')) {
-                                            $set('min_threshold', $state * 0.1);
-                                        }
+        {
+            return $form
+                ->schema([
+                    Forms\Components\Section::make('Storage Information')
+                        ->description('Basic information about the fuel storage')
+                        ->schema([
+                            Forms\Components\Grid::make(2)
+                                ->schema([
+                                    Forms\Components\TextInput::make('name')
+                                        ->required()
+                                        ->maxLength(255)
+                                        ->live(onBlur: true)
+                                        ->placeholder('e.g., Main Fuel Storage A'),
                                         
-                                        // Ensure current_capacity doesn't exceed max
-                                        $current = $get('current_capacity');
-                                        if ($current && $current > $state) {
-                                            $set('current_capacity', $state);
-                                        }
-                                    })
-                                    ->suffix('L'),
+                                    Forms\Components\TextInput::make('code')
+                                        ->required()
+                                        ->unique(ignoreRecord: true)
+                                        ->maxLength(20)
+                                        ->placeholder('e.g., ST-001')
+                                        ->regex('/^[A-Z]{2}-\d{3,4}$/')
+                                        ->validationMessages([
+                                            'regex' => 'Code must follow format: ST-001',
+                                        ])
+                                        ->helperText('Format: ST-001 (Letters-Numbers)'),
+                                ]),
+                                
+                            Forms\Components\TextInput::make('location')
+                                ->required()
+                                ->maxLength(255)
+                                ->placeholder('e.g., Mining Site A - North Sector'),
+                                
+                            Forms\Components\Textarea::make('description')
+                                ->columnSpanFull()
+                                ->rows(3)
+                                ->placeholder('Optional description of the storage facility'),
+                        ]),
+                        
+                    Forms\Components\Section::make('Capacity Configuration')
+                        ->description('Set storage capacity limits and thresholds')
+                        ->schema([
+                            Forms\Components\Grid::make(3)
+                                ->schema([
+                                    Forms\Components\TextInput::make('max_capacity')
+                                        ->label('Maximum Capacity (Liters)')
+                                        ->required()
+                                        ->numeric()
+                                        ->minValue(1)
+                                        ->maxValue(1000000)
+                                        ->step(1)
+                                        ->live(onBlur: true)
+                                        ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
+                                            // Auto-calculate min_threshold if not set (10% of max)
+                                            if ($state && !$get('min_threshold')) {
+                                                $set('min_threshold', $state * 0.1);
+                                            }
+                                            
+                                            // Ensure current_capacity doesn't exceed max
+                                            $current = $get('current_capacity');
+                                            if ($current && $current > $state) {
+                                                $set('current_capacity', $state);
+                                            }
+                                        })
+                                        ->suffix('L'),
+                                        
+                                    Forms\Components\TextInput::make('current_capacity')
+                                        ->label('Current Capacity (Liters)')
+                                        ->required()
+                                        ->numeric()
+                                        ->minValue(0)
+                                        ->live(onBlur: true)
+                                        ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
+                                            $max = $get('max_capacity');
+                                            if ($max && $state > $max) {
+                                                $set('current_capacity', $max);
+                                            }
+                                        })
+                                        ->suffix('L'),
+                                        
+                                    Forms\Components\TextInput::make('min_threshold')
+                                        ->label('Minimum Threshold (Liters)')
+                                        ->required()
+                                        ->numeric()
+                                        ->minValue(0)
+                                        ->live(onBlur: true)
+                                        ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
+                                            $max = $get('max_capacity');
+                                            if ($max && $state > $max) {
+                                                $set('min_threshold', $max * 0.1);
+                                            }
+                                        })
+                                        ->helperText('Alert will be triggered when capacity falls below this level')
+                                        ->suffix('L'),
+                                ]),
+                                
+                            // Fixed Capacity Calculator Preview using Placeholder
+                            Forms\Components\Placeholder::make('capacity_preview')
+                                ->label('Capacity Preview')
+                                ->content(function (Forms\Get $get): \Illuminate\Support\HtmlString {
+                                    $max = (float) $get('max_capacity');
+                                    $current = (float) $get('current_capacity');
+                                    $threshold = (float) $get('min_threshold');
                                     
-                                Forms\Components\TextInput::make('current_capacity')
-                                    ->label('Current Capacity (Liters)')
-                                    ->required()
-                                    ->numeric()
-                                    ->minValue(0)
-                                    ->live(onBlur: true)
-                                    ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
-                                        $max = $get('max_capacity');
-                                        if ($max && $state > $max) {
-                                            $set('current_capacity', $max);
-                                        }
-                                    })
-                                    ->suffix('L'),
+                                    if (!$max) {
+                                        return new \Illuminate\Support\HtmlString('
+                                            <div class="text-center text-gray-500 dark:text-gray-400 py-4">
+                                                <div class="text-sm">Enter maximum capacity to see preview</div>
+                                            </div>
+                                        ');
+                                    }
                                     
-                                Forms\Components\TextInput::make('min_threshold')
-                                    ->label('Minimum Threshold (Liters)')
-                                    ->required()
-                                    ->numeric()
-                                    ->minValue(0)
-                                    ->live(onBlur: true)
-                                    ->afterStateUpdated(function ($state, Forms\Set $set, Forms\Get $get) {
-                                        $max = $get('max_capacity');
-                                        if ($max && $state > $max) {
-                                            $set('min_threshold', $max * 0.1);
-                                        }
-                                    })
-                                    ->helperText('Alert will be triggered when capacity falls below this level')
-                                    ->suffix('L'),
-                            ]),
-                            
-                        // Capacity Calculator Preview
-                        Forms\Components\Placeholder::make('capacity_preview')
-                            ->label('Capacity Preview')
-                            ->content(function (Forms\Get $get): string {
-                                $max = (float) $get('max_capacity');
-                                $current = (float) $get('current_capacity');
-                                $threshold = (float) $get('min_threshold');
-                                
-                                if (!$max) return 'Enter maximum capacity to see preview';
-                                
-                                $percentage = $max > 0 ? ($current / $max) * 100 : 0;
-                                $available = $max - $current;
-                                $belowThreshold = $current <= $threshold;
-                                
-                                $status = match(true) {
-                                    $percentage >= 80 => '🟢 Optimal',
-                                    $percentage >= 50 => '🟡 Good',
-                                    $percentage >= 20 => '🟠 Low',
-                                    default => '🔴 Critical'
-                                };
-                                
-                                return "
-                                    <div class='space-y-2'>
-                                        <div><strong>Status:</strong> {$status}</div>
-                                        <div><strong>Usage:</strong> " . number_format($percentage, 1) . "%</div>
-                                        <div><strong>Available:</strong> " . number_format($available, 0) . " L</div>
-                                        " . ($belowThreshold ? "<div class='text-red-600'><strong>⚠️ Below Threshold!</strong></div>" : "") . "
-                                    </div>
-                                ";
-                            })
-                            ->columnSpanFull(),
-                    ]),
-                    
-                Forms\Components\Section::make('Status')
-                    ->schema([
-                        Forms\Components\Toggle::make('is_active')
-                            ->label('Active')
-                            ->default(true)
-                            ->helperText('Inactive storages will not appear in transaction options'),
-                    ]),
-            ]);
-    }
+                                    $percentage = $max > 0 ? ($current / $max) * 100 : 0;
+                                    $available = $max - $current;
+                                    $belowThreshold = $current <= $threshold;
+                                    
+                                    $status = match(true) {
+                                        $percentage >= 80 => ['text' => 'Optimal', 'icon' => '🟢', 'color' => 'text-green-600'],
+                                        $percentage >= 50 => ['text' => 'Good', 'icon' => '🟡', 'color' => 'text-yellow-600'],
+                                        $percentage >= 20 => ['text' => 'Low', 'icon' => '🟠', 'color' => 'text-orange-600'],
+                                        $percentage > 0 => ['text' => 'Critical', 'icon' => '🔴', 'color' => 'text-red-600'],
+                                        default => ['text' => 'Empty', 'icon' => '⚫', 'color' => 'text-gray-600']
+                                    };
+                                    
+                                    $alertHtml = '';
+                                    if ($belowThreshold && $threshold > 0) {
+                                        $alertHtml = '
+                                            <div class="flex items-center justify-center space-x-2 text-red-600 dark:text-red-400 mt-3">
+                                                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 19.5c-.77.833.192 2.5 1.732 2.5z" />
+                                                </svg>
+                                                <span class="text-sm font-medium">Below Threshold!</span>
+                                            </div>
+                                        ';
+                                    }
+                                    
+                                    return new \Illuminate\Support\HtmlString('
+                                        <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                                            <div class="space-y-3">
+                                                <div class="flex items-center justify-between">
+                                                    <div class="flex items-center space-x-2">
+                                                        <span class="text-lg">' . $status['icon'] . '</span>
+                                                        <span class="font-medium ' . $status['color'] . ' dark:text-white">' . $status['text'] . '</span>
+                                                    </div>
+                                                    <div class="text-right">
+                                                        <div class="text-lg font-bold text-gray-900 dark:text-white">
+                                                            ' . number_format($percentage, 1) . '%
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="grid grid-cols-3 gap-4 text-sm">
+                                                    <div class="text-center">
+                                                        <div class="font-medium text-gray-900 dark:text-white">
+                                                            ' . number_format($current, 0) . 'L
+                                                        </div>
+                                                        <div class="text-gray-500 dark:text-gray-400">Current</div>
+                                                    </div>
+                                                    <div class="text-center">
+                                                        <div class="font-medium text-gray-900 dark:text-white">
+                                                            ' . number_format($available, 0) . 'L
+                                                        </div>
+                                                        <div class="text-gray-500 dark:text-gray-400">Available</div>
+                                                    </div>
+                                                    <div class="text-center">
+                                                        <div class="font-medium text-gray-900 dark:text-white">
+                                                            ' . number_format($max, 0) . 'L
+                                                        </div>
+                                                        <div class="text-gray-500 dark:text-gray-400">Maximum</div>
+                                                    </div>
+                                                </div>
+                                                ' . $alertHtml . '
+                                            </div>
+                                        </div>
+                                    ');
+                                })
+                                ->columnSpanFull(),
+                        ]),
+                        
+                    Forms\Components\Section::make('Status')
+                        ->schema([
+                            Forms\Components\Toggle::make('is_active')
+                                ->label('Active')
+                                ->default(true)
+                                ->helperText('Inactive storages will not appear in transaction options'),
+                        ]),
+                ]);
+        }
 
     public static function table(Table $table): Table
     {

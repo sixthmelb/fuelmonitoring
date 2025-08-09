@@ -135,7 +135,7 @@ class UnitResource extends Resource
                                     ->label('Current KM')
                                     ->numeric()
                                     ->minValue(0)
-                                    ->step(0.1)
+                                    ->step(1)
                                     ->suffix('KM')
                                     ->live(onBlur: true)
                                     ->afterStateUpdated(function (Forms\Set $set, Forms\Get $get, $state) {
@@ -153,7 +153,7 @@ class UnitResource extends Resource
                                     ->label('Current HM (Hour Meter)')
                                     ->numeric()
                                     ->minValue(0)
-                                    ->step(0.1)
+                                    ->step(1)
                                     ->suffix('HM')
                                     ->live(onBlur: true)
                                     ->afterStateUpdated(function (Forms\Set $set, Forms\Get $get, $state) {

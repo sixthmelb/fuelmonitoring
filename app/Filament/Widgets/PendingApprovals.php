@@ -10,10 +10,10 @@ use Filament\Widgets\TableWidget as BaseWidget;
 use Filament\Forms\Components\Textarea;
 
 /**
- * Command untuk membuat widget ini:
- * php artisan make:filament-widget PendingApprovals --table
+ * Fixed PendingApprovals Widget
  * 
- * Widget untuk menampilkan approval requests yang pending
+ * MASALAH: getUrl() parameter type error pada line 130
+ * SOLUSI: Fix parameter format untuk getUrl()
  */
 class PendingApprovals extends BaseWidget
 {
@@ -122,12 +122,13 @@ class PendingApprovals extends BaseWidget
                         ->successNotificationTitle('Request rejected')
                         ->after(fn () => $this->dispatch('$refresh')),
                         
+                    // FIX: Corrected getUrl parameter format
                     Tables\Actions\Action::make('view_details')
                         ->label('View Details')
                         ->icon('heroicon-o-eye')
                         ->color('info')
                         ->url(fn (ApprovalRequest $record): string => 
-                            \App\Filament\Resources\ApprovalRequestResource::getUrl('view', $record)
+                            \App\Filament\Resources\ApprovalRequestResource::getUrl('view', ['record' => $record->id])
                         )
                         ->openUrlInNewTab(),
                 ])->button()
