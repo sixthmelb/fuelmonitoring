@@ -9,12 +9,8 @@ use App\Observers\FuelTransactionObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 
 /**
- * Command untuk membuat model ini:
- * php artisan make:model FuelTransaction -m
- * 
- * Observer akan otomatis update capacity storage/truck dan unit mileage
- * 
  * PERBAIKAN: Logic untuk allow edit setelah approval request disetujui
+ * TAMBAHAN: Proper tracking of used edit permissions
  */
 #[ObservedBy([FuelTransactionObserver::class])]
 class FuelTransaction extends Model
@@ -50,10 +46,10 @@ class FuelTransaction extends Model
     ];
 
     // Transaction Types
-    const TYPE_STORAGE_TO_UNIT = 'storage_to_unit';           // Storage langsung ke Unit
-    const TYPE_STORAGE_TO_TRUCK = 'storage_to_truck';         // Storage ke Fuel Truck
-    const TYPE_TRUCK_TO_UNIT = 'truck_to_unit';               // Fuel Truck ke Unit
-    const TYPE_VENDOR_TO_STORAGE = 'vendor_to_storage';       // Vendor ke Storage (supply)
+    const TYPE_STORAGE_TO_UNIT = 'storage_to_unit';
+    const TYPE_STORAGE_TO_TRUCK = 'storage_to_truck';
+    const TYPE_TRUCK_TO_UNIT = 'truck_to_unit';
+    const TYPE_VENDOR_TO_STORAGE = 'vendor_to_storage';
 
     /**
      * Get all transaction types
@@ -87,74 +83,45 @@ class FuelTransaction extends Model
     /**
      * Relationships
      */
-
-    /**
-     * Source storage relationship
-     */
     public function sourceStorage()
     {
         return $this->belongsTo(FuelStorage::class, 'source_storage_id');
     }
 
-    /**
-     * Destination storage relationship
-     */
     public function destinationStorage()
     {
         return $this->belongsTo(FuelStorage::class, 'destination_storage_id');
     }
 
-    /**
-     * Source truck relationship
-     */
     public function sourceTruck()
     {
         return $this->belongsTo(FuelTruck::class, 'source_truck_id');
     }
 
-    /**
-     * Destination truck relationship
-     */
     public function destinationTruck()
     {
         return $this->belongsTo(FuelTruck::class, 'destination_truck_id');
     }
 
-    /**
-     * Unit relationship
-     */
     public function unit()
     {
         return $this->belongsTo(Unit::class);
     }
 
-    /**
-     * Created by user relationship
-     */
     public function createdBy()
     {
         return $this->belongsTo(User::class, 'created_by');
     }
 
-    /**
-     * Approved by user relationship
-     */
     public function approvedBy()
     {
         return $this->belongsTo(User::class, 'approved_by');
     }
 
-    /**
-     * Approval requests for this transaction
-     */
     public function approvalRequests()
     {
         return $this->hasMany(ApprovalRequest::class);
     }
-
-    /**
-     * Business Logic Methods
-     */
 
     /**
      * Get source name (storage or truck)
@@ -237,6 +204,10 @@ class FuelTransaction extends Model
     {
         $currentUser = auth()->user();
         
+        if (!$currentUser) {
+            return false;
+        }
+        
         // Check apakah ada pending approval request
         $hasPendingRequest = $this->approvalRequests()
             ->where('status', ApprovalRequest::STATUS_PENDING)
@@ -270,7 +241,7 @@ class FuelTransaction extends Model
                 ->where('request_type', ApprovalRequest::TYPE_EDIT)
                 ->where('requested_by', $currentUser->id)
                 ->where('status', ApprovalRequest::STATUS_APPROVED)
-                ->whereNull('used_at') // PERBAIKAN: Check belum digunakan
+                ->whereNull('used_at') // PENTING: Check belum digunakan
                 ->exists();
                 
             if ($hasUnusedApprovedEditRequest) {
@@ -291,7 +262,7 @@ class FuelTransaction extends Model
         $currentUser = auth()->user();
         
         // Hanya staff yang bisa request edit
-        if (!$currentUser->hasRole('staff')) {
+        if (!$currentUser || !$currentUser->hasRole('staff')) {
             return false;
         }
         
@@ -314,7 +285,7 @@ class FuelTransaction extends Model
             ->where('request_type', ApprovalRequest::TYPE_EDIT)
             ->where('requested_by', $currentUser->id)
             ->where('status', ApprovalRequest::STATUS_APPROVED)
-            ->whereNull('used_at') // PERBAIKAN: Check belum digunakan
+            ->whereNull('used_at') // Check belum digunakan
             ->exists();
             
         if ($hasUnusedApprovedEditRequest) {
@@ -332,7 +303,7 @@ class FuelTransaction extends Model
         $currentUser = auth()->user();
         
         // Hanya staff yang bisa request delete
-        if (!$currentUser->hasRole('staff')) {
+        if (!$currentUser || !$currentUser->hasRole('staff')) {
             return false;
         }
         
@@ -350,22 +321,11 @@ class FuelTransaction extends Model
             return false;
         }
         
-        // Staff tidak bisa request delete jika sudah ada approved delete request
-        $hasApprovedDeleteRequest = $this->approvalRequests()
-            ->where('request_type', ApprovalRequest::TYPE_DELETE)
-            ->where('requested_by', $currentUser->id)
-            ->where('status', ApprovalRequest::STATUS_APPROVED)
-            ->exists();
-            
-        if ($hasApprovedDeleteRequest) {
-            return false; // Request delete sudah approved, seharusnya transaksi sudah di-delete
-        }
-        
         return true;
     }
 
     /**
-     * BARU: Get edit permission status untuk current user
+     * PERBAIKAN: Get edit permission status untuk current user
      * Memberikan informasi lebih detail tentang status edit permission
      */
     public function getEditStatusForCurrentUser(): array
@@ -409,7 +369,7 @@ class FuelTransaction extends Model
                 ->where('request_type', ApprovalRequest::TYPE_EDIT)
                 ->where('requested_by', $currentUser->id)
                 ->where('status', ApprovalRequest::STATUS_APPROVED)
-                ->whereNull('used_at') // PERBAIKAN: Check belum digunakan
+                ->whereNull('used_at') // Check belum digunakan
                 ->exists();
                 
             if ($hasUnusedApprovedEditRequest) {
@@ -426,7 +386,7 @@ class FuelTransaction extends Model
                 ->where('request_type', ApprovalRequest::TYPE_EDIT)
                 ->where('requested_by', $currentUser->id)
                 ->where('status', ApprovalRequest::STATUS_APPROVED)
-                ->whereNotNull('used_at')
+                ->whereNotNull('used_at') // Yang sudah digunakan
                 ->exists();
                 
             if ($hasUsedApprovedEditRequest) {

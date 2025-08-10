@@ -19,8 +19,11 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('approval_requests', function (Blueprint $table) {
-            $table->timestamp('used_at')->nullable()->after('approved_at');
-            $table->index(['fuel_transaction_id', 'used_at']);
+            // Check if column doesn't exist already
+            if (!Schema::hasColumn('approval_requests', 'used_at')) {
+                $table->timestamp('used_at')->nullable()->after('approved_at');
+                $table->index(['fuel_transaction_id', 'used_at']);
+            }
         });
     }
 
@@ -30,8 +33,10 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('approval_requests', function (Blueprint $table) {
-            $table->dropIndex(['fuel_transaction_id', 'used_at']);
-            $table->dropColumn('used_at');
+            if (Schema::hasColumn('approval_requests', 'used_at')) {
+                $table->dropIndex(['fuel_transaction_id', 'used_at']);
+                $table->dropColumn('used_at');
+            }
         });
     }
 };

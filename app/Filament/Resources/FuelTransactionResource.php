@@ -502,7 +502,8 @@ class FuelTransactionResource extends Resource
                             );
                     }),
             ])
-            ->actions([
+            
+->actions([
                 Tables\Actions\ViewAction::make(),
                 
                 // PERBAIKAN: Edit action dengan logic yang tepat
@@ -538,7 +539,11 @@ class FuelTransactionResource extends Resource
                             'original_data' => $record->toArray(),
                         ]);
                     })
-                    ->successNotificationTitle('Edit request submitted for approval'),
+                    ->successNotificationTitle('Edit request submitted for approval')
+                    ->after(function () {
+                        // Refresh the table to update action buttons
+                        return redirect(request()->header('Referer'));
+                    }),
                     
                 // PERBAIKAN: Request Delete action - hanya muncul jika memang bisa request
                 Tables\Actions\Action::make('request_delete')
@@ -568,7 +573,11 @@ class FuelTransactionResource extends Resource
                             'original_data' => $record->toArray(),
                         ]);
                     })
-                    ->successNotificationTitle('Delete request submitted for approval'),
+                    ->successNotificationTitle('Delete request submitted for approval')
+                    ->after(function () {
+                        // Refresh the table to update action buttons
+                        return redirect(request()->header('Referer'));
+                    }),
                 
                 // APPROVE - HANYA untuk Manager/Superadmin untuk transaksi pending
                 Tables\Actions\Action::make('approve')
@@ -587,15 +596,20 @@ class FuelTransactionResource extends Resource
                             'approved_at' => now(),
                         ]);
                     })
-                    ->successNotificationTitle('Transaction approved successfully'),
+                    ->successNotificationTitle('Transaction approved successfully')
+                    ->after(function () {
+                        // Refresh the table to update action buttons
+                        return redirect(request()->header('Referer'));
+                    }),
                     
-                // BARU: Status indicator untuk informasi saja
+                // Status indicator untuk informasi saja
                 Tables\Actions\Action::make('edit_status_info')
                     ->label(function (FuelTransaction $record): string {
                         $editStatus = $record->getEditStatusForCurrentUser();
                         return match($editStatus['status']) {
                             'pending_approval' => 'Request Pending',
                             'approved_edit' => 'Edit Approved',
+                            'edit_used' => 'Permission Used',
                             'new_transaction' => 'Can Edit (New)',
                             'manager_access' => 'Manager Access',
                             default => 'No Access'
@@ -606,6 +620,7 @@ class FuelTransactionResource extends Resource
                         return match($editStatus['status']) {
                             'pending_approval' => 'heroicon-o-clock',
                             'approved_edit' => 'heroicon-o-check-circle',
+                            'edit_used' => 'heroicon-o-check-badge',
                             'new_transaction' => 'heroicon-o-pencil-square',
                             'manager_access' => 'heroicon-o-key',
                             default => 'heroicon-o-lock-closed'
@@ -616,14 +631,15 @@ class FuelTransactionResource extends Resource
                         return match($editStatus['status']) {
                             'pending_approval' => 'warning',
                             'approved_edit' => 'success',
-                            'new_transaction' => 'info',
+                            'edit_used' => 'info',
+                            'new_transaction' => 'primary',
                             'manager_access' => 'primary',
                             default => 'gray'
                         };
                     })
                     ->disabled()
                     ->visible(fn (FuelTransaction $record): bool => 
-                        // Hanya tampilkan jika tidak bisa edit dan tidak bisa request
+                        // Tampilkan status info jika tidak bisa edit dan tidak bisa request
                         !$record->canBeEdited() && !$record->canRequestEdit() && !$record->canRequestDelete()
                     )
                     ->tooltip(function (FuelTransaction $record): string {

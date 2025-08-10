@@ -4,13 +4,14 @@ namespace App\Filament\Resources\FuelTransactionResource\Pages;
 
 use App\Filament\Resources\FuelTransactionResource;
 use App\Models\FuelTransaction;
+use App\Models\ApprovalRequest;
 use Filament\Actions;
 use Filament\Resources\Pages\EditRecord;
 
 /**
  * File: app/Filament/Resources/FuelTransactionResource/Pages/EditFuelTransaction.php
  * 
- * PERBAIKAN: Authorization check yang tepat untuk approval workflow
+ * PERBAIKAN: Mark approved edit permission as used after edit
  */
 class EditFuelTransaction extends EditRecord
 {
@@ -56,7 +57,7 @@ class EditFuelTransaction extends EditRecord
             Actions\DeleteAction::make()
                 ->visible(fn (): bool => 
                     auth()->user()->hasAnyRole(['superadmin', 'manager']) &&
-                    !$this->record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
+                    !$this->record->approvalRequests()->where('status', ApprovalRequest::STATUS_PENDING)->exists()
                 ),
                 
             Actions\Action::make('view_approval_requests')
@@ -72,7 +73,7 @@ class EditFuelTransaction extends EditRecord
                     ])
                 ),
                 
-            // BARU: Status indicator untuk menunjukkan mengapa user bisa edit
+            // Status indicator untuk menunjukkan mengapa user bisa edit
             Actions\Action::make('edit_permission_info')
                 ->label(function (): string {
                     $editStatus = $this->record->getEditStatusForCurrentUser();
@@ -149,9 +150,15 @@ class EditFuelTransaction extends EditRecord
     {
         $editType = $this->getEditType();
         
+        // PENTING: Jika ini adalah edit dari approved request, 
+        // kita perlu menandai bahwa edit request sudah digunakan
+        if ($editType === 'approved_edit_request') {
+            $this->markApprovedEditRequestAsUsed();
+        }
+        
         // Different notification based on edit type
         $message = match($editType) {
-            'approved_edit_request' => 'Transaction updated using approved edit request.',
+            'approved_edit_request' => 'Transaction updated using approved edit request. Edit permission has been consumed.',
             'new_transaction_edit' => 'New transaction updated successfully.',
             'manager_direct_edit' => 'Transaction updated by manager.',
             default => 'Transaction updated successfully.'
@@ -162,12 +169,6 @@ class EditFuelTransaction extends EditRecord
             ->body($message)
             ->success()
             ->send();
-        
-        // PENTING: Jika ini adalah edit dari approved request, 
-        // kita perlu menandai bahwa edit request sudah digunakan
-        if ($editType === 'approved_edit_request') {
-            $this->markApprovedEditRequestAsUsed();
-        }
     }
 
     /**
@@ -176,24 +177,35 @@ class EditFuelTransaction extends EditRecord
      */
     private function markApprovedEditRequestAsUsed(): void
     {
+        // Cari approved edit request untuk user ini dan transaksi ini yang belum digunakan
         $approvedEditRequest = $this->record->approvalRequests()
-            ->where('request_type', \App\Models\ApprovalRequest::TYPE_EDIT)
+            ->where('request_type', ApprovalRequest::TYPE_EDIT)
             ->where('requested_by', auth()->id())
-            ->where('status', \App\Models\ApprovalRequest::STATUS_APPROVED)
+            ->where('status', ApprovalRequest::STATUS_APPROVED)
+            ->whereNull('used_at') // PENTING: yang belum digunakan
             ->first();
             
         if ($approvedEditRequest) {
             // Update approval request dengan timestamp used
             $approvedEditRequest->update([
                 'used_at' => now(),
-                'rejection_reason' => 'Edit permission used on ' . now()->format('Y-m-d H:i:s')
             ]);
             
             \Log::info('Approved edit request marked as used', [
                 'approval_request_id' => $approvedEditRequest->id,
                 'transaction_id' => $this->record->id,
-                'used_by' => auth()->id()
+                'used_by' => auth()->id(),
+                'used_at' => now()
             ]);
+            
+            // Refresh record untuk memastikan perubahan terdeteksi
+            $this->record->refresh();
+            
+            \Filament\Notifications\Notification::make()
+                ->title('Edit Permission Consumed')
+                ->body('Your approved edit permission has been used. Submit a new request to edit again.')
+                ->warning()
+                ->send();
         }
     }
 
@@ -206,7 +218,7 @@ class EditFuelTransaction extends EditRecord
     }
 
     /**
-     * PERBAIKAN: Override authorization check
+     * Override authorization check
      */
     protected function authorizeAccess(): void
     {
