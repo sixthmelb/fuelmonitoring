@@ -5,13 +5,17 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Observers\ApprovalRequestObserver;
+use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 
 /**
  * Command untuk membuat model ini:
  * php artisan make:model ApprovalRequest -m
  * 
+ * PERBAIKAN: Tambah observer untuk handle approve workflow
  * Model untuk sistem approval edit/delete data
  */
+#[ObservedBy([ApprovalRequestObserver::class])]
 class ApprovalRequest extends Model
 {
     use HasFactory, SoftDeletes;
@@ -22,6 +26,7 @@ class ApprovalRequest extends Model
         'requested_by',
         'approved_by',
         'approved_at',
+        'used_at', // BARU: Track kapan edit permission digunakan
         'status',
         'reason',
         'original_data',
@@ -31,6 +36,7 @@ class ApprovalRequest extends Model
 
     protected $casts = [
         'approved_at' => 'datetime',
+        'used_at' => 'datetime', // BARU
         'original_data' => 'array',
         'new_data' => 'array',
     ];
@@ -117,6 +123,7 @@ class ApprovalRequest extends Model
 
     /**
      * Approve the request
+     * PERBAIKAN: Observer akan handle apply changes, jadi kita hanya update status
      */
     public function approve(User $approver): bool
     {
@@ -124,21 +131,12 @@ class ApprovalRequest extends Model
             return false;
         }
 
+        // Update status - observer akan handle apply changes
         $this->update([
             'status' => self::STATUS_APPROVED,
             'approved_by' => $approver->id,
             'approved_at' => now(),
         ]);
-
-        // Apply changes to fuel transaction if it's an edit request
-        if ($this->request_type === self::TYPE_EDIT && $this->new_data) {
-            $this->fuelTransaction->update($this->new_data);
-        }
-
-        // Delete fuel transaction if it's a delete request
-        if ($this->request_type === self::TYPE_DELETE) {
-            $this->fuelTransaction->delete();
-        }
 
         return true;
     }
@@ -217,6 +215,29 @@ class ApprovalRequest extends Model
     }
 
     /**
+     * BARU: Check if this approval request allows staff to edit
+     * Staff bisa edit langsung jika ada approved edit request untuk transaksi ini
+     */
+    public function allowsDirectEdit(): bool
+    {
+        return $this->request_type === self::TYPE_EDIT && 
+               $this->status === self::STATUS_APPROVED;
+    }
+
+    /**
+     * BARU: Check if fuel transaction is editable by specific user after this approval
+     */
+    public function allowsEditBy(User $user): bool
+    {
+        if (!$this->allowsDirectEdit()) {
+            return false;
+        }
+        
+        // Hanya user yang request yang bisa edit
+        return $this->requested_by === $user->id;
+    }
+
+    /**
      * Scopes
      */
 
@@ -267,5 +288,15 @@ class ApprovalRequest extends Model
     {
         return $query->where('status', self::STATUS_PENDING)
                     ->whereNull('approved_by');
+    }
+
+    /**
+     * BARU: Scope for approved edit requests by user
+     */
+    public function scopeApprovedEditByUser($query, $userId)
+    {
+        return $query->where('request_type', self::TYPE_EDIT)
+                    ->where('status', self::STATUS_APPROVED)
+                    ->where('requested_by', $userId);
     }
 }

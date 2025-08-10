@@ -13,6 +13,8 @@ use Illuminate\Database\Eloquent\Attributes\ObservedBy;
  * php artisan make:model FuelTransaction -m
  * 
  * Observer akan otomatis update capacity storage/truck dan unit mileage
+ * 
+ * PERBAIKAN: Logic untuk allow edit setelah approval request disetujui
  */
 #[ObservedBy([FuelTransactionObserver::class])]
 class FuelTransaction extends Model
@@ -227,63 +229,69 @@ class FuelTransaction extends Model
         return !empty($result) ? $result : null;
     }
 
-   public function canBeEdited(): bool
+    /**
+     * PERBAIKAN: Check if transaction can be edited
+     * Logic baru untuk mengakomodasi approval workflow yang benar
+     */
+    public function canBeEdited(): bool
     {
-        // Staff tidak pernah bisa edit langsung
-        if (auth()->user()->hasRole('staff')) {
-            return false;
+        $currentUser = auth()->user();
+        
+        // Check apakah ada pending approval request
+        $hasPendingRequest = $this->approvalRequests()
+            ->where('status', ApprovalRequest::STATUS_PENDING)
+            ->exists();
+            
+        if ($hasPendingRequest) {
+            return false; // Tidak bisa edit jika masih ada pending request
+        }
+
+        // UNTUK MANAGER/SUPERADMIN:
+        if ($currentUser->hasAnyRole(['manager', 'superadmin'])) {
+            // Manager/superadmin bisa edit transaksi kapan saja (asalkan tidak ada pending request)
+            return true;
         }
         
-        // Untuk Manager/Superadmin:
-        // 1. Transaksi belum approved DAN dibuat dalam 24 jam terakhir
-        // 2. ATAU transaksi sudah approved tapi tidak ada pending approval request
-        
-        if (auth()->user()->hasAnyRole(['manager', 'superadmin'])) {
-            // Cek apakah ada pending approval request
-            $hasPendingRequest = $this->approvalRequests()
-                ->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)
+        // UNTUK STAFF:
+        if ($currentUser->hasRole('staff')) {
+            // Staff hanya bisa edit jika:
+            // 1. Transaksi belum approved DAN dia yang membuat DAN dalam 24 jam, ATAU
+            // 2. Ada approved edit request untuk transaksi ini oleh staff yang sama DAN belum digunakan
+            
+            // Case 1: Transaksi baru yang belum approved
+            if (!$this->is_approved && 
+                $this->created_by === $currentUser->id && 
+                $this->created_at->diffInHours(now()) <= 24) {
+                return true;
+            }
+            
+            // Case 2: Ada approved edit request dari staff ini yang belum digunakan
+            $hasUnusedApprovedEditRequest = $this->approvalRequests()
+                ->where('request_type', ApprovalRequest::TYPE_EDIT)
+                ->where('requested_by', $currentUser->id)
+                ->where('status', ApprovalRequest::STATUS_APPROVED)
+                ->whereNull('used_at') // PERBAIKAN: Check belum digunakan
                 ->exists();
                 
-            if ($hasPendingRequest) {
-                return false;
+            if ($hasUnusedApprovedEditRequest) {
+                return true;
             }
             
-            // Jika belum approved, cek apakah dalam 24 jam
-            if (!$this->is_approved) {
-                return $this->created_at->diffInHours(now()) <= 24;
-            }
-            
-            // Jika sudah approved, manager/superadmin bisa edit kapan saja
-            // (asalkan tidak ada pending request)
-            return true;
+            return false;
         }
         
         return false;
     }
 
     /**
-     * Check if transaction requires approval for editing
-     * (Untuk staff yang akan submit approval request)
-     */
-    public function requiresApprovalForEdit(): bool
-    {
-        // Staff selalu butuh approval untuk edit
-        if (auth()->user()->hasRole('staff')) {
-            // Hanya bisa request edit untuk transaksi yang sudah approved
-            return $this->is_approved;
-        }
-        
-        // Manager/superadmin tidak butuh approval jika dalam kondisi canBeEdited
-        return !$this->canBeEdited();
-    }
-
-    /**
-     * Check if user can request edit for this transaction
+     * PERBAIKAN: Check if user can request edit for this transaction
      */
     public function canRequestEdit(): bool
     {
+        $currentUser = auth()->user();
+        
         // Hanya staff yang bisa request edit
-        if (!auth()->user()->hasRole('staff')) {
+        if (!$currentUser->hasRole('staff')) {
             return false;
         }
         
@@ -294,18 +302,178 @@ class FuelTransaction extends Model
         
         // Tidak boleh ada pending approval request
         $hasPendingRequest = $this->approvalRequests()
-            ->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)
+            ->where('status', ApprovalRequest::STATUS_PENDING)
             ->exists();
             
-        return !$hasPendingRequest;
+        if ($hasPendingRequest) {
+            return false;
+        }
+        
+        // Staff tidak bisa request edit jika sudah ada approved edit request yang belum digunakan
+        $hasUnusedApprovedEditRequest = $this->approvalRequests()
+            ->where('request_type', ApprovalRequest::TYPE_EDIT)
+            ->where('requested_by', $currentUser->id)
+            ->where('status', ApprovalRequest::STATUS_APPROVED)
+            ->whereNull('used_at') // PERBAIKAN: Check belum digunakan
+            ->exists();
+            
+        if ($hasUnusedApprovedEditRequest) {
+            return false; // Sudah bisa edit langsung, tidak perlu request lagi
+        }
+        
+        return true;
     }
 
     /**
-     * Check if user can request delete for this transaction
+     * PERBAIKAN: Check if user can request delete for this transaction
      */
     public function canRequestDelete(): bool
     {
-        return $this->canRequestEdit(); // Same logic as edit request
+        $currentUser = auth()->user();
+        
+        // Hanya staff yang bisa request delete
+        if (!$currentUser->hasRole('staff')) {
+            return false;
+        }
+        
+        // Transaksi harus sudah approved
+        if (!$this->is_approved) {
+            return false;
+        }
+        
+        // Tidak boleh ada pending approval request
+        $hasPendingRequest = $this->approvalRequests()
+            ->where('status', ApprovalRequest::STATUS_PENDING)
+            ->exists();
+            
+        if ($hasPendingRequest) {
+            return false;
+        }
+        
+        // Staff tidak bisa request delete jika sudah ada approved delete request
+        $hasApprovedDeleteRequest = $this->approvalRequests()
+            ->where('request_type', ApprovalRequest::TYPE_DELETE)
+            ->where('requested_by', $currentUser->id)
+            ->where('status', ApprovalRequest::STATUS_APPROVED)
+            ->exists();
+            
+        if ($hasApprovedDeleteRequest) {
+            return false; // Request delete sudah approved, seharusnya transaksi sudah di-delete
+        }
+        
+        return true;
+    }
+
+    /**
+     * BARU: Get edit permission status untuk current user
+     * Memberikan informasi lebih detail tentang status edit permission
+     */
+    public function getEditStatusForCurrentUser(): array
+    {
+        $currentUser = auth()->user();
+        
+        if (!$currentUser) {
+            return [
+                'can_edit' => false,
+                'can_request_edit' => false,
+                'status' => 'not_authenticated',
+                'message' => 'User not authenticated'
+            ];
+        }
+        
+        $hasPendingRequest = $this->approvalRequests()
+            ->where('status', ApprovalRequest::STATUS_PENDING)
+            ->exists();
+            
+        if ($hasPendingRequest) {
+            return [
+                'can_edit' => false,
+                'can_request_edit' => false,
+                'status' => 'pending_approval',
+                'message' => 'Transaction has pending approval request'
+            ];
+        }
+        
+        if ($currentUser->hasAnyRole(['manager', 'superadmin'])) {
+            return [
+                'can_edit' => true,
+                'can_request_edit' => false,
+                'status' => 'manager_access',
+                'message' => 'Manager can edit directly'
+            ];
+        }
+        
+        if ($currentUser->hasRole('staff')) {
+            // Check for unused approved edit request
+            $hasUnusedApprovedEditRequest = $this->approvalRequests()
+                ->where('request_type', ApprovalRequest::TYPE_EDIT)
+                ->where('requested_by', $currentUser->id)
+                ->where('status', ApprovalRequest::STATUS_APPROVED)
+                ->whereNull('used_at') // PERBAIKAN: Check belum digunakan
+                ->exists();
+                
+            if ($hasUnusedApprovedEditRequest) {
+                return [
+                    'can_edit' => true,
+                    'can_request_edit' => false,
+                    'status' => 'approved_edit',
+                    'message' => 'Edit request has been approved and ready to use'
+                ];
+            }
+            
+            // Check for used approved edit request
+            $hasUsedApprovedEditRequest = $this->approvalRequests()
+                ->where('request_type', ApprovalRequest::TYPE_EDIT)
+                ->where('requested_by', $currentUser->id)
+                ->where('status', ApprovalRequest::STATUS_APPROVED)
+                ->whereNotNull('used_at')
+                ->exists();
+                
+            if ($hasUsedApprovedEditRequest) {
+                return [
+                    'can_edit' => false,
+                    'can_request_edit' => true,
+                    'status' => 'edit_used',
+                    'message' => 'Previous edit permission has been used. Can request new edit approval.'
+                ];
+            }
+            
+            // Check if new transaction (not approved yet)
+            if (!$this->is_approved && 
+                $this->created_by === $currentUser->id && 
+                $this->created_at->diffInHours(now()) <= 24) {
+                return [
+                    'can_edit' => true,
+                    'can_request_edit' => false,
+                    'status' => 'new_transaction',
+                    'message' => 'Can edit new transaction within 24 hours'
+                ];
+            }
+            
+            // Check if can request edit
+            if ($this->is_approved) {
+                return [
+                    'can_edit' => false,
+                    'can_request_edit' => true,
+                    'status' => 'can_request',
+                    'message' => 'Can request edit approval'
+                ];
+            }
+            
+            return [
+                'can_edit' => false,
+                'can_request_edit' => false,
+                'status' => 'no_access',
+                'message' => 'No edit access for this transaction'
+            ];
+        }
+        
+        return [
+            'can_edit' => false,
+            'can_request_edit' => false,
+            'status' => 'no_role',
+            'message' => 'User has no appropriate role'
+        ];
     }
 
     /**

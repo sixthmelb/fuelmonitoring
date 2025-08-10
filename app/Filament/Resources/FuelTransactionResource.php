@@ -26,8 +26,10 @@ use Filament\Forms\Set;
  * - Dynamic form berdasarkan transaction type
  * - Real-time capacity validation
  * - Fuel consumption calculation
- * - Approval workflow integration
+ * - Approval workflow integration yang tepat
  * - Advanced filtering dan reporting
+ * 
+ * PERBAIKAN: Logic action yang tepat berdasarkan approval status
  */
 class FuelTransactionResource extends Resource
 {
@@ -45,7 +47,7 @@ class FuelTransactionResource extends Resource
     
     protected static ?int $navigationSort = 4;
 
-public static function form(Form $form): Form
+    public static function form(Form $form): Form
     {
         return $form
             ->schema([
@@ -503,24 +505,21 @@ public static function form(Form $form): Form
             ->actions([
                 Tables\Actions\ViewAction::make(),
                 
-                // EDIT LANGSUNG - HANYA untuk Manager/Superadmin untuk transaksi yang bisa diedit
+                // PERBAIKAN: Edit action dengan logic yang tepat
                 Tables\Actions\EditAction::make()
-                    ->visible(fn (FuelTransaction $record): bool => 
-                        auth()->user()->hasAnyRole(['superadmin', 'manager']) && 
-                        $record->canBeEdited() &&
-                        !$record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
-                    ),
+                    ->visible(fn (FuelTransaction $record): bool => $record->canBeEdited())
+                    ->tooltip(function (FuelTransaction $record): ?string {
+                        $editStatus = $record->getEditStatusForCurrentUser();
+                        return $editStatus['message'];
+                    }),
                     
-                // REQUEST EDIT - HANYA untuk Staff untuk transaksi yang sudah approved
+                // PERBAIKAN: Request Edit action - hanya muncul jika memang bisa request
                 Tables\Actions\Action::make('request_edit')
                     ->label('Request Edit')
                     ->icon('heroicon-o-pencil-square')
                     ->color('warning')
-                    ->visible(fn (FuelTransaction $record): bool => 
-                        auth()->user()->hasRole('staff') && 
-                        $record->is_approved &&
-                        !$record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
-                    )
+                    ->visible(fn (FuelTransaction $record): bool => $record->canRequestEdit())
+                    ->tooltip('Request approval to edit this transaction')
                     ->form([
                         Forms\Components\Textarea::make('reason')
                             ->label('Reason for Edit Request')
@@ -541,16 +540,13 @@ public static function form(Form $form): Form
                     })
                     ->successNotificationTitle('Edit request submitted for approval'),
                     
-                // REQUEST DELETE - HANYA untuk Staff untuk transaksi yang sudah approved
+                // PERBAIKAN: Request Delete action - hanya muncul jika memang bisa request
                 Tables\Actions\Action::make('request_delete')
                     ->label('Request Delete')
                     ->icon('heroicon-o-trash')
                     ->color('danger')
-                    ->visible(fn (FuelTransaction $record): bool => 
-                        auth()->user()->hasRole('staff') && 
-                        $record->is_approved &&
-                        !$record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
-                    )
+                    ->visible(fn (FuelTransaction $record): bool => $record->canRequestDelete())
+                    ->tooltip('Request approval to delete this transaction')
                     ->form([
                         Forms\Components\Textarea::make('reason')
                             ->label('Reason for Delete Request')
@@ -593,17 +589,47 @@ public static function form(Form $form): Form
                     })
                     ->successNotificationTitle('Transaction approved successfully'),
                     
-                // STATUS INDICATOR - untuk staff yang punya pending requests (read-only)
-                Tables\Actions\Action::make('pending_request_status')
-                    ->label('Request Pending')
-                    ->icon('heroicon-o-clock')
-                    ->color('gray')
+                // BARU: Status indicator untuk informasi saja
+                Tables\Actions\Action::make('edit_status_info')
+                    ->label(function (FuelTransaction $record): string {
+                        $editStatus = $record->getEditStatusForCurrentUser();
+                        return match($editStatus['status']) {
+                            'pending_approval' => 'Request Pending',
+                            'approved_edit' => 'Edit Approved',
+                            'new_transaction' => 'Can Edit (New)',
+                            'manager_access' => 'Manager Access',
+                            default => 'No Access'
+                        };
+                    })
+                    ->icon(function (FuelTransaction $record): string {
+                        $editStatus = $record->getEditStatusForCurrentUser();
+                        return match($editStatus['status']) {
+                            'pending_approval' => 'heroicon-o-clock',
+                            'approved_edit' => 'heroicon-o-check-circle',
+                            'new_transaction' => 'heroicon-o-pencil-square',
+                            'manager_access' => 'heroicon-o-key',
+                            default => 'heroicon-o-lock-closed'
+                        };
+                    })
+                    ->color(function (FuelTransaction $record): string {
+                        $editStatus = $record->getEditStatusForCurrentUser();
+                        return match($editStatus['status']) {
+                            'pending_approval' => 'warning',
+                            'approved_edit' => 'success',
+                            'new_transaction' => 'info',
+                            'manager_access' => 'primary',
+                            default => 'gray'
+                        };
+                    })
                     ->disabled()
                     ->visible(fn (FuelTransaction $record): bool => 
-                        auth()->user()->hasRole('staff') && 
-                        $record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()
+                        // Hanya tampilkan jika tidak bisa edit dan tidak bisa request
+                        !$record->canBeEdited() && !$record->canRequestEdit() && !$record->canRequestDelete()
                     )
-                    ->tooltip('You have a pending approval request for this transaction'),
+                    ->tooltip(function (FuelTransaction $record): string {
+                        $editStatus = $record->getEditStatusForCurrentUser();
+                        return $editStatus['message'];
+                    }),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
@@ -676,24 +702,13 @@ public static function form(Form $form): Form
         $pending = static::getModel()::pendingApproval()->count();
         return $pending > 0 ? 'warning' : null;
     }
+
+    /**
+     * Kontrol akses ke edit page - PERBAIKAN: logic yang tepat
+     */
     public static function canEdit(Model $record): bool
     {
-    // Hanya manager/superadmin yang bisa edit
-    if (!auth()->user()->hasAnyRole(['manager', 'superadmin'])) {
-        return false;
-    }
-    
-    // Transaksi harus bisa diedit
-    if (!$record->canBeEdited()) {
-        return false;
-    }
-    
-    // Tidak boleh ada pending approval request
-    if ($record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()) {
-        return false;
-    }
-    
-    return true;
+        return $record->canBeEdited();
     }
 
     /**
@@ -713,5 +728,4 @@ public static function form(Form $form): Form
         // Semua authenticated user bisa view
         return auth()->check();
     }
-    
 }

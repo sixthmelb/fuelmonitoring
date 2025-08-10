@@ -9,6 +9,8 @@ use App\Observers\FuelTransactionObserver;
 use App\Models\FuelStorage;
 use App\Models\FuelTruck;
 use App\Models\FuelTransaction;
+use App\Models\ApprovalRequest;
+use App\Observers\ApprovalRequestObserver;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -28,5 +30,6 @@ class AppServiceProvider extends ServiceProvider
             FuelStorage::observe(FuelStorageObserver::class);
             FuelTruck::observe(FuelTruckObserver::class);
             FuelTransaction::observe(FuelTransactionObserver::class);
+            ApprovalRequest::observe(ApprovalRequestObserver::class);
     }
 }

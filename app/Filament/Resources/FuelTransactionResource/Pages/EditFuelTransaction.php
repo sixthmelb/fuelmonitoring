@@ -10,34 +10,37 @@ use Filament\Resources\Pages\EditRecord;
 /**
  * File: app/Filament/Resources/FuelTransactionResource/Pages/EditFuelTransaction.php
  * 
- * Command untuk update file ini:
- * php artisan make:filament-page EditFuelTransaction --resource=FuelTransactionResource --type=EditRecord
- * 
- * PERBAIKAN:
- * 1. Tambah authorization check
- * 2. Redirect staff yang tidak punya akses
- * 3. Block edit jika ada pending approval
+ * PERBAIKAN: Authorization check yang tepat untuk approval workflow
  */
 class EditFuelTransaction extends EditRecord
 {
     protected static string $resource = FuelTransactionResource::class;
 
     /**
-     * Mount method untuk cek authorization
+     * Mount method untuk cek authorization yang tepat
      */
     public function mount(int | string $record): void
     {
         $this->record = $this->resolveRecord($record);
         
-        // Cek authorization
-        if (!$this->canEditTransaction()) {
-            // Redirect ke index dengan error message
+        // PERBAIKAN: Gunakan method canBeEdited() yang sudah diperbaiki
+        if (!$this->record->canBeEdited()) {
+            // Redirect ke index dengan error message yang lebih informatif
+            $editStatus = $this->record->getEditStatusForCurrentUser();
+            
             $this->redirect(static::getResource()::getUrl('index'));
             
-            // Show notification
+            // Show notification berdasarkan status
+            $message = match($editStatus['status']) {
+                'pending_approval' => 'This transaction has a pending approval request.',
+                'can_request' => 'You need to submit an edit request for approval first.',
+                'no_access' => 'You do not have permission to edit this transaction.',
+                default => $editStatus['message']
+            };
+            
             \Filament\Notifications\Notification::make()
-                ->title('Access Denied')
-                ->body('You do not have permission to edit this transaction. Please submit an edit request instead.')
+                ->title('Edit Access Denied')
+                ->body($message)
                 ->danger()
                 ->send();
             
@@ -45,34 +48,6 @@ class EditFuelTransaction extends EditRecord
         }
         
         parent::mount($record);
-    }
-
-    /**
-     * Check if current user can edit this transaction
-     */
-    private function canEditTransaction(): bool
-    {
-        // Staff tidak bisa edit langsung
-        if (auth()->user()->hasRole('staff')) {
-            return false;
-        }
-        
-        // Manager/Superadmin harus cek kondisi lain
-        if (!auth()->user()->hasAnyRole(['manager', 'superadmin'])) {
-            return false;
-        }
-        
-        // Transaksi harus bisa diedit
-        if (!$this->record->canBeEdited()) {
-            return false;
-        }
-        
-        // Tidak boleh ada pending approval request
-        if ($this->record->approvalRequests()->where('status', \App\Models\ApprovalRequest::STATUS_PENDING)->exists()) {
-            return false;
-        }
-        
-        return true;
     }
 
     protected function getHeaderActions(): array
@@ -96,6 +71,41 @@ class EditFuelTransaction extends EditRecord
                         'tableFilters[fuel_transaction_id][value]' => $this->record->id
                     ])
                 ),
+                
+            // BARU: Status indicator untuk menunjukkan mengapa user bisa edit
+            Actions\Action::make('edit_permission_info')
+                ->label(function (): string {
+                    $editStatus = $this->record->getEditStatusForCurrentUser();
+                    return match($editStatus['status']) {
+                        'approved_edit' => 'Edit Approved',
+                        'new_transaction' => 'New Transaction',
+                        'manager_access' => 'Manager Access',
+                        default => 'Edit Permission'
+                    };
+                })
+                ->icon(function (): string {
+                    $editStatus = $this->record->getEditStatusForCurrentUser();
+                    return match($editStatus['status']) {
+                        'approved_edit' => 'heroicon-o-check-circle',
+                        'new_transaction' => 'heroicon-o-clock',
+                        'manager_access' => 'heroicon-o-key',
+                        default => 'heroicon-o-information-circle'
+                    };
+                })
+                ->color(function (): string {
+                    $editStatus = $this->record->getEditStatusForCurrentUser();
+                    return match($editStatus['status']) {
+                        'approved_edit' => 'success',
+                        'new_transaction' => 'warning',
+                        'manager_access' => 'primary',
+                        default => 'info'
+                    };
+                })
+                ->disabled()
+                ->tooltip(function (): string {
+                    $editStatus = $this->record->getEditStatusForCurrentUser();
+                    return $editStatus['message'];
+                }),
         ];
     }
 
@@ -104,11 +114,12 @@ class EditFuelTransaction extends EditRecord
      */
     protected function mutateFormDataBeforeSave(array $data): array
     {
-        // Log the edit action
-        \Log::info('Fuel transaction edited directly', [
+        // Log the edit action untuk audit trail
+        \Log::info('Fuel transaction edited', [
             'transaction_id' => $this->record->id,
             'transaction_code' => $this->record->transaction_code,
             'edited_by' => auth()->id(),
+            'edit_type' => $this->getEditType(),
             'old_data' => $this->record->toArray(),
             'new_data' => $data
         ]);
@@ -117,16 +128,73 @@ class EditFuelTransaction extends EditRecord
     }
 
     /**
+     * Determine edit type untuk logging
+     */
+    private function getEditType(): string
+    {
+        $editStatus = $this->record->getEditStatusForCurrentUser();
+        
+        return match($editStatus['status']) {
+            'approved_edit' => 'approved_edit_request',
+            'new_transaction' => 'new_transaction_edit',
+            'manager_access' => 'manager_direct_edit',
+            default => 'unknown_edit'
+        };
+    }
+
+    /**
      * After save actions
      */
     protected function afterSave(): void
     {
-        // Send notification about direct edit
+        $editType = $this->getEditType();
+        
+        // Different notification based on edit type
+        $message = match($editType) {
+            'approved_edit_request' => 'Transaction updated using approved edit request.',
+            'new_transaction_edit' => 'New transaction updated successfully.',
+            'manager_direct_edit' => 'Transaction updated by manager.',
+            default => 'Transaction updated successfully.'
+        };
+        
         \Filament\Notifications\Notification::make()
-            ->title('Transaction Updated Successfully')
-            ->body('The fuel transaction has been updated directly.')
+            ->title('Transaction Updated')
+            ->body($message)
             ->success()
             ->send();
+        
+        // PENTING: Jika ini adalah edit dari approved request, 
+        // kita perlu menandai bahwa edit request sudah digunakan
+        if ($editType === 'approved_edit_request') {
+            $this->markApprovedEditRequestAsUsed();
+        }
+    }
+
+    /**
+     * Mark approved edit request as used
+     * Supaya tidak bisa digunakan lagi untuk edit
+     */
+    private function markApprovedEditRequestAsUsed(): void
+    {
+        $approvedEditRequest = $this->record->approvalRequests()
+            ->where('request_type', \App\Models\ApprovalRequest::TYPE_EDIT)
+            ->where('requested_by', auth()->id())
+            ->where('status', \App\Models\ApprovalRequest::STATUS_APPROVED)
+            ->first();
+            
+        if ($approvedEditRequest) {
+            // Update approval request dengan timestamp used
+            $approvedEditRequest->update([
+                'used_at' => now(),
+                'rejection_reason' => 'Edit permission used on ' . now()->format('Y-m-d H:i:s')
+            ]);
+            
+            \Log::info('Approved edit request marked as used', [
+                'approval_request_id' => $approvedEditRequest->id,
+                'transaction_id' => $this->record->id,
+                'used_by' => auth()->id()
+            ]);
+        }
     }
 
     /**
@@ -135,5 +203,16 @@ class EditFuelTransaction extends EditRecord
     protected function getRedirectUrl(): string
     {
         return $this->getResource()::getUrl('index');
+    }
+
+    /**
+     * PERBAIKAN: Override authorization check
+     */
+    protected function authorizeAccess(): void
+    {
+        // Custom authorization menggunakan method canBeEdited()
+        if (!$this->record->canBeEdited()) {
+            $this->halt();
+        }
     }
 }
